@@ -1,0 +1,9 @@
+streamlit
+streamlit-autorefresh
+pandas
+numpy
+plotly
+requests
+yfinance
+streamlit-authenticator
+PyYAML
