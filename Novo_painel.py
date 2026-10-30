@@ -367,6 +367,47 @@ def fetch_single_asset_data(ticker_symbol):
     return 0.0, 0.0, f"Erro: {e}", "NEUTRO", "", 0.0, 0.0, 0.0
 
 
+@st.cache_data(ttl=5)
+def fetch_adr_premarket_data(symbol):
+  url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API_KEY}"
+  try:
+    response = requests.get(url, timeout=5)
+    if response.status_code == 200:
+      data = response.json()
+      c = data.get("c")
+      pc = data.get("pc")
+      dp = data.get("dp")
+      if c is not None and pc is not None and pc > 0:
+        price = float(c)
+        prev_close = float(pc)
+        pct = (
+            float(dp)
+            if dp is not None
+            else ((price - prev_close) / prev_close) * 100.0
+        )
+        return price, prev_close, pct
+  except Exception:
+    pass
+
+  try:
+    ticker = yf.Ticker(symbol)
+    hist = ticker.history(period="2d", interval="1d")
+    if not hist.empty:
+      prev_close = (
+          float(hist["Close"].iloc[-2])
+          if len(hist) >= 2
+          else float(hist["Close"].iloc[-1])
+      )
+      intraday = ticker.history(period="1d", interval="5m", prepost=True)
+      if not intraday.empty:
+        price = float(intraday["Close"].iloc[-1])
+        pct = ((price - prev_close) / prev_close) * 100.0
+        return price, prev_close, pct
+  except Exception:
+    pass
+  return 0.0, 0.0, 0.0
+
+
 @st.cache_data(ttl=4)
 def fetch_ewz_intraday_df():
   try:
@@ -1690,7 +1731,7 @@ elif aba_ativa == "Dólar":
 # ABA 3: ADRs EUA
 # =========================================================================
 elif aba_ativa == "ADRs EUA":
-  st.subheader("Monitoramento de ADRs Brasileiras")
+  st.subheader("Monitoramento de ADRs Brasileiras & Pré-Market")
 
   adr_tickers = [
       "PBR",
@@ -1707,15 +1748,21 @@ elif aba_ativa == "ADRs EUA":
   records = []
 
   for ticker in adr_tickers:
-    price, pct, state, direction, source, open_p, prev_c, gap = (
+    price_pm, prev_c, pct_pm = fetch_adr_premarket_data(ticker)
+    price, pct_intraday, state, direction, source, open_p, _, gap = (
         fetch_single_asset_data(ticker)
     )
+
+    if price_pm == 0.0:
+      price_pm = price
+
     records.append({
         "Ticker": ticker,
         "Fech. Ant. ($)": fmt_br(prev_c, 2, "$"),
-        "Abertura ($)": fmt_br(open_p, 2, "$"),
-        "Preço ($)": fmt_br(price, 2, "$"),
-        "Var (%)": pct,
+        "Pré-Market ($)": fmt_br(price_pm, 2, "$"),
+        "Var. Pré (%)": pct_pm,
+        "Preço Atual ($)": fmt_br(price, 2, "$"),
+        "Var. Dia (%)": pct_intraday,
         "Gap (%)": gap,
         "Direção": f"{direction} {source}",
     })
@@ -1723,9 +1770,15 @@ elif aba_ativa == "ADRs EUA":
   df_adrs = pd.DataFrame(records)
 
   styled_df_adrs = (
-      df_adrs.style.map(color_variation, subset=["Var (%)", "Gap (%)"])
+      df_adrs.style.map(
+          color_variation, subset=["Var. Pré (%)", "Var. Dia (%)", "Gap (%)"]
+      )
       .map(color_direction, subset=["Direção"])
-      .format({"Var (%)": lambda v: fmt_pct(v), "Gap (%)": lambda v: fmt_pct(v)})
+      .format({
+          "Var. Pré (%)": lambda v: fmt_pct(v),
+          "Var. Dia (%)": lambda v: fmt_pct(v),
+          "Gap (%)": lambda v: fmt_pct(v),
+      })
   )
 
   st.dataframe(styled_df_adrs, width="stretch", hide_index=True)
